@@ -19,5 +19,5 @@ variable "sqlServerUserName" {
 variable "sqlServerPassword" {
   type        = string
   description = "Sql Server Password"
-  default     = "sqladmin123!@#"
+  default     = "sanjm"
 }

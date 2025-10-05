@@ -1,7 +1,7 @@
 var storageAccountName = 'classifiedadsdev'
 var sqlServerName = 'classifiedadsdev'
 var sqlServerUserName = 'classifiedads'
-var sqlServerPassword = 'sqladmin123!@#'
+var sqlServerPassword = 'sanjm'
 var tenantId = subscription().tenantId
 
 @description('The location in which the Azure Storage resources should be deployed.')

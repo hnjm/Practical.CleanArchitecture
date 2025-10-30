@@ -6,6 +6,7 @@
     <Project Path="ClassifiedAds.Infrastructure/ClassifiedAds.Infrastructure.csproj" />
     <Project Path="ClassifiedAds.Persistence.MySQL/ClassifiedAds.Persistence.MySQL.csproj" />
     <Project Path="ClassifiedAds.Persistence.PostgreSQL/ClassifiedAds.Persistence.PostgreSQL.csproj" />
+    <Project Path="ClassifiedAds.Persistence.SqlServer/ClassifiedAds.Persistence.SqlServer.csproj" Id="5046664a-23dc-4b14-88b9-064d808ff78e" />
   </Folder>
   <Folder Name="/Contracts/">
     <Project Path="ClassifiedAds.Contracts/ClassifiedAds.Contracts.csproj" />
@@ -13,6 +14,7 @@
   <Folder Name="/Hosts/">
     <Project Path="ClassifiedAds.AspireAppHost/ClassifiedAds.AspireAppHost.csproj" />
     <Project Path="ClassifiedAds.Background/ClassifiedAds.Background.csproj" />
+    <Project Path="ClassifiedAds.Migrator.Tests/ClassifiedAds.Migrator.Tests.csproj" Id="f94748b5-20dc-4487-91b5-9043751549d4" />
     <Project Path="ClassifiedAds.Migrator/ClassifiedAds.Migrator.csproj" />
     <Project Path="ClassifiedAds.WebAPI/ClassifiedAds.WebAPI.csproj" />
   </Folder>

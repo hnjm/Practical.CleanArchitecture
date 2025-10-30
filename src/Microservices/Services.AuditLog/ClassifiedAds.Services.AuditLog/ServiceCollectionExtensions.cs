@@ -5,7 +5,7 @@ using ClassifiedAds.Services.AuditLog.ConfigurationOptions;
 using ClassifiedAds.Services.AuditLog.DTOs;
 using ClassifiedAds.Services.AuditLog.Entities;
 using ClassifiedAds.Services.AuditLog.MessageBusConsumers;
-using ClassifiedAds.Services.AuditLog.Repositories;
+using ClassifiedAds.Services.AuditLog.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
@@ -54,7 +54,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddHostedServicesAuditLogModule(this IServiceCollection services)
     {
         services.AddMessageBusConsumers(Assembly.GetExecutingAssembly());
-        services.AddOutboxEventPublishers(Assembly.GetExecutingAssembly());
+        services.AddOutboxMessagePublishers(Assembly.GetExecutingAssembly());
 
         services.AddHostedService<MessageBusConsumerBackgroundService<AuditLogAggregationConsumer, AuditLogCreatedEvent>>();
 

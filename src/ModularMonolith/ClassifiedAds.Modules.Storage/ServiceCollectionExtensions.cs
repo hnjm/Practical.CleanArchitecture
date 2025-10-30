@@ -6,7 +6,7 @@ using ClassifiedAds.Modules.Storage.DTOs;
 using ClassifiedAds.Modules.Storage.Entities;
 using ClassifiedAds.Modules.Storage.HostedServices;
 using ClassifiedAds.Modules.Storage.MessageBusConsumers;
-using ClassifiedAds.Modules.Storage.Repositories;
+using ClassifiedAds.Modules.Storage.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
@@ -38,7 +38,7 @@ public static class ServiceCollectionExtensions
         }))
             .AddScoped<IRepository<FileEntry, Guid>, Repository<FileEntry, Guid>>()
             .AddScoped<IRepository<AuditLogEntry, Guid>, Repository<AuditLogEntry, Guid>>()
-            .AddScoped<IRepository<OutboxEvent, Guid>, Repository<OutboxEvent, Guid>>();
+            .AddScoped<IRepository<OutboxMessage, Guid>, Repository<OutboxMessage, Guid>>();
 
         services.AddMessageHandlers(Assembly.GetExecutingAssembly());
 
@@ -69,7 +69,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddHostedServicesStorageModule(this IServiceCollection services)
     {
         services.AddMessageBusConsumers(Assembly.GetExecutingAssembly());
-        services.AddOutboxEventPublishers(Assembly.GetExecutingAssembly());
+        services.AddOutboxMessagePublishers(Assembly.GetExecutingAssembly());
 
         services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, FileUploadedEvent>>();
         services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, FileDeletedEvent>>();

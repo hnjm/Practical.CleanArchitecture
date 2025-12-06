@@ -4,6 +4,8 @@ using ClassifiedAds.Application.AuditLogEntries.Queries;
 using ClassifiedAds.Application.FileEntries.Queries;
 using ClassifiedAds.Domain.Entities;
 using ClassifiedAds.Domain.Infrastructure.Storages;
+using ClassifiedAds.Domain.Repositories;
+using ClassifiedAds.Infrastructure.AI;
 using ClassifiedAds.WebAPI.Authorization;
 using ClassifiedAds.WebAPI.ConfigurationOptions;
 using ClassifiedAds.WebAPI.Hubs;
@@ -14,6 +16,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Data.SqlTypes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
@@ -25,6 +29,7 @@ using System.Net;
 using System.Net.Mime;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ClassifiedAds.WebAPI.Controllers;
@@ -42,6 +47,9 @@ public class FilesController : Controller
     private readonly IHubContext<NotificationHub> _notificationHubContext;
     private readonly IStringLocalizer _stringLocalizer;
     private readonly IAuthorizationService _authorizationService;
+    private readonly IRepository<FileEntryText, Guid> _fileEntryTextRepository;
+    private readonly IRepository<FileEntryEmbedding, Guid> _fileEntryEmbeddingRepository;
+    private readonly EmbeddingService _embeddingService;
 
     public FilesController(Dispatcher dispatcher,
         IOptions<AppSettings> options,
@@ -49,7 +57,10 @@ public class FilesController : Controller
         IMemoryCache memoryCache,
         IHubContext<NotificationHub> notificationHubContext,
         IStringLocalizer stringLocalizer,
-        IAuthorizationService authorizationService)
+        IAuthorizationService authorizationService,
+        IRepository<FileEntryText, Guid> fileEntryTextRepository,
+        IRepository<FileEntryEmbedding, Guid> fileEntryEmbeddingRepository,
+        EmbeddingService embeddingService)
     {
         _dispatcher = dispatcher;
         _options = options.Value;
@@ -58,6 +69,9 @@ public class FilesController : Controller
         _notificationHubContext = notificationHubContext;
         _stringLocalizer = stringLocalizer;
         _authorizationService = authorizationService;
+        _fileEntryTextRepository = fileEntryTextRepository;
+        _fileEntryEmbeddingRepository = fileEntryEmbeddingRepository;
+        _embeddingService = embeddingService;
     }
 
     [Authorize(Permissions.GetFiles)]
@@ -67,6 +81,59 @@ public class FilesController : Controller
         await _notificationHubContext.Clients.All.SendAsync("ReceiveMessage", $"{_stringLocalizer["Getting files ..."]}");
         var fileEntries = await _dispatcher.DispatchAsync(new GetFileEntriesQuery());
         return Ok(fileEntries.ToModels());
+    }
+
+    [Authorize(Permissions.GetFiles)]
+    [HttpGet("vectorsearch")]
+    public async Task<ActionResult<IEnumerable<FileEntryVectorSearchResultModel>>> VectorSearch(string searchText)
+    {
+        var embeddingRs = await _embeddingService.GenerateAsync(searchText);
+        var embedding = new SqlVector<float>(embeddingRs.Vector);
+
+        var chunks = _fileEntryEmbeddingRepository.GetQueryableSet()
+                .Where(x => !x.FileEntry.Deleted)
+                .OrderBy(x => EF.Functions.VectorDistance("cosine", x.Embedding, embedding))
+                .Take(5)
+                .Select(x => new
+                {
+                    x.FileEntry,
+                    x.ChunkName,
+                    x.ChunkLocation,
+                    x.ShortText,
+                    SimilarityScore = EF.Functions.VectorDistance("cosine", x.Embedding, embedding)
+                }).ToList();
+
+        var results = new List<FileEntryVectorSearchResultModel>();
+
+        foreach (var chunk in chunks)
+        {
+            var result = new FileEntryVectorSearchResultModel
+            {
+                FileEntryId = chunk.FileEntry.Id,
+                FileEntryName = chunk.FileEntry.Name,
+                FileName = chunk.FileEntry.FileName,
+                ChunkName = chunk.ChunkName,
+                SimilarityScore = chunk.SimilarityScore
+            };
+
+            var fileExtension = Path.GetExtension(chunk.FileEntry.FileName);
+
+            if (fileExtension == ".jpg" || fileExtension == ".png")
+            {
+                var content = await GetBytesAsync(chunk.FileEntry);
+                result.ChunkData = $"data:image/{fileExtension.TrimStart('.')};base64,{Convert.ToBase64String(content)}";
+            }
+            else
+            {
+                result.ChunkData = chunk.ShortText;
+            }
+
+            result.FileExtension = fileExtension;
+
+            results.Add(result);
+        }
+
+        return Ok(results);
     }
 
     [Authorize(Permissions.UploadFile)]
@@ -144,7 +211,42 @@ public class FilesController : Controller
             return Forbid();
         }
 
-        return Ok(fileEntry.ToModel());
+        var model = fileEntry.ToModel();
+
+        model.FileEntryText = _fileEntryTextRepository.GetQueryableSet()
+            .Where(x => x.FileEntryId == fileEntry.Id)
+            .Select(x => new FileEntryTextModel
+            {
+                TextLocation = x.TextLocation
+            }).FirstOrDefault();
+
+        model.FileEntryEmbeddings = _fileEntryEmbeddingRepository.GetQueryableSet()
+            .Where(x => x.FileEntryId == fileEntry.Id)
+            .OrderBy(x => x.CreatedDateTime)
+            .Select(x => new
+            {
+                x.ChunkName,
+                x.ChunkLocation,
+                x.ShortText,
+                x.Embedding,
+                x.TokenDetails,
+                x.CreatedDateTime,
+                x.UpdatedDateTime,
+            })
+            .AsEnumerable()
+            .Select(x => new FileEntryEmbeddingModel
+            {
+                ChunkName = x.ChunkName,
+                ChunkLocation = x.ChunkLocation,
+                ShortText = x.ShortText,
+                Embedding = JsonSerializer.Serialize(x.Embedding.Memory),
+                TokenDetails = x.TokenDetails,
+                CreatedDateTime = x.CreatedDateTime,
+                UpdatedDateTime = x.UpdatedDateTime,
+            })
+            .ToList();
+
+        return Ok(model);
     }
 
     [Authorize(Permissions.DownloadFile)]
@@ -159,8 +261,14 @@ public class FilesController : Controller
             return Forbid();
         }
 
-        var rawData = await _fileManager.ReadAsync(fileEntry);
-        var content = rawData;
+        var content = await GetBytesAsync(fileEntry);
+
+        return File(content, MediaTypeNames.Application.Octet, WebUtility.HtmlEncode(fileEntry.FileName));
+    }
+
+    private async Task<byte[]> GetBytesAsync(FileEntry fileEntry, CancellationToken cancellationToken = default)
+    {
+        var content = await _fileManager.ReadAsync(fileEntry, cancellationToken);
 
         if (fileEntry.Encrypted)
         {
@@ -173,16 +281,63 @@ public class FilesController : Controller
                       .Decrypt();
 
             content = fileEntry.FileLocation != "Fake.txt"
-                ? rawData
+                ? content
                 .UseAES(encryptionKey)
                 .WithCipher(CipherMode.CBC)
                 .WithIV(fileEntry.EncryptionIV.FromBase64String())
                 .WithPadding(PaddingMode.PKCS7)
                 .Decrypt()
-                : rawData;
+                : content;
         }
 
-        return File(content, MediaTypeNames.Application.Octet, WebUtility.HtmlEncode(fileEntry.FileName));
+        return content;
+    }
+
+    [Authorize(Permissions.DownloadFile)]
+    [HttpGet("{id}/downloadtext")]
+    public async Task<IActionResult> DownloadText(Guid id)
+    {
+        var fileEntry = await _dispatcher.DispatchAsync(new GetEntityByIdQuery<FileEntry> { Id = id });
+
+        var authorizationResult = await _authorizationService.AuthorizeAsync(User, fileEntry, Operations.Read);
+        if (!authorizationResult.Succeeded)
+        {
+            return Forbid();
+        }
+
+        var fileEntryText = _fileEntryTextRepository.GetQueryableSet()
+              .Where(x => x.FileEntryId == fileEntry.Id)
+              .Select(x => new FileEntryTextModel
+              {
+                  TextLocation = x.TextLocation
+              }).FirstOrDefault();
+
+        var stream = System.IO.File.OpenRead(Path.Combine(_options.Storage.TempFolderPath, fileEntryText.TextLocation));
+        var ext = Path.GetExtension(fileEntryText.TextLocation).ToLowerInvariant();
+        return File(stream, MediaTypeNames.Application.Octet, WebUtility.HtmlEncode(fileEntry.FileName + ext));
+    }
+
+    [Authorize(Permissions.DownloadFile)]
+    [HttpGet("{id}/downloadchunk/{chunkName}")]
+    public async Task<IActionResult> DownloadChunk(Guid id, string chunkName)
+    {
+        var fileEntry = await _dispatcher.DispatchAsync(new GetEntityByIdQuery<FileEntry> { Id = id });
+
+        var authorizationResult = await _authorizationService.AuthorizeAsync(User, fileEntry, Operations.Read);
+        if (!authorizationResult.Succeeded)
+        {
+            return Forbid();
+        }
+
+        var fileEntryEmbedding = _fileEntryEmbeddingRepository.GetQueryableSet()
+              .Where(x => x.FileEntryId == fileEntry.Id && x.ChunkName == chunkName)
+              .Select(x => new FileEntryEmbeddingModel
+              {
+                  ChunkLocation = x.ChunkLocation,
+              }).FirstOrDefault();
+
+        var stream = System.IO.File.OpenRead(Path.Combine(_options.Storage.TempFolderPath, fileEntryEmbedding.ChunkLocation));
+        return File(stream, MediaTypeNames.Application.Octet, WebUtility.HtmlEncode(fileEntryEmbedding.ChunkName));
     }
 
     [Authorize(Permissions.UpdateFile)]

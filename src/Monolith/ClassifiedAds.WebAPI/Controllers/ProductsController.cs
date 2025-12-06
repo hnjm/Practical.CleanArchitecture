@@ -7,6 +7,8 @@ using ClassifiedAds.Application.Products.Queries;
 using ClassifiedAds.CrossCuttingConcerns.Csv;
 using ClassifiedAds.CrossCuttingConcerns.Pdf;
 using ClassifiedAds.Domain.Entities;
+using ClassifiedAds.Domain.Repositories;
+using ClassifiedAds.Infrastructure.AI;
 using ClassifiedAds.WebAPI.Authorization;
 using ClassifiedAds.WebAPI.Models.Products;
 using ClassifiedAds.WebAPI.RateLimiterPolicies;
@@ -14,6 +16,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Data.SqlTypes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -37,18 +41,24 @@ public class ProductsController : ControllerBase
     private readonly IPdfWriter<ExportProductsToPdf> _pdfWriter;
     private readonly ICsvWriter<ExportProductsToCsv> _productCsvWriter;
     private readonly ICsvReader<ImportProductsFromCsv> _productCsvReader;
+    private readonly IRepository<ProductEmbedding, Guid> _productEmbeddingRepository;
+    private readonly EmbeddingService _embeddingService;
 
     public ProductsController(Dispatcher dispatcher,
         ILogger<ProductsController> logger,
         IPdfWriter<ExportProductsToPdf> pdfWriter,
         ICsvWriter<ExportProductsToCsv> productCsvWriter,
-        ICsvReader<ImportProductsFromCsv> productCsvReader)
+        ICsvReader<ImportProductsFromCsv> productCsvReader,
+        IRepository<ProductEmbedding, Guid> productEmbeddingRepository,
+        EmbeddingService embeddingService)
     {
         _dispatcher = dispatcher;
         _logger = logger;
         _pdfWriter = pdfWriter;
         _productCsvWriter = productCsvWriter;
         _productCsvReader = productCsvReader;
+        _productEmbeddingRepository = productEmbeddingRepository;
+        _embeddingService = embeddingService;
     }
 
     [Authorize(Permissions.GetProducts)]
@@ -61,14 +71,75 @@ public class ProductsController : ControllerBase
         return Ok(model);
     }
 
+    [Authorize(Permissions.GetProducts)]
+    [HttpGet("vectorsearch")]
+    public async Task<ActionResult<IEnumerable<ProductModel>>> VectorSearch(string searchText)
+    {
+        var embeddingRs = await _embeddingService.GenerateAsync(searchText);
+        var embedding = new SqlVector<float>(embeddingRs.Vector);
+
+        var products = _productEmbeddingRepository.GetQueryableSet()
+                .OrderBy(x => EF.Functions.VectorDistance("cosine", x.Embedding, embedding))
+                .Take(5)
+                .Select(x => new ProductModel
+                {
+                    Id = x.Product.Id,
+                    Code = x.Product.Code,
+                    Name = x.Product.Name,
+                    Description = x.Product.Description,
+                    SimilarityScore = EF.Functions.VectorDistance("cosine", x.Embedding, embedding)
+                }).ToList();
+
+        return Ok(products);
+    }
+
     [Authorize(Permissions.GetProduct)]
     [HttpGet("{id}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<Product>> Get(Guid id)
+    public async Task<ActionResult<ProductModel>> Get(Guid id)
     {
         var product = await _dispatcher.DispatchAsync(new GetProductQuery { Id = id, ThrowNotFoundIfNull = true });
         var model = product.ToModel();
+
+        var embedding = _productEmbeddingRepository.GetQueryableSet().Where(x => x.ProductId == id)
+            .Select(x => new
+            {
+                x.Text,
+                x.Embedding,
+                x.TokenDetails,
+                x.CreatedDateTime,
+                x.UpdatedDateTime,
+            })
+            .FirstOrDefault();
+
+        if (embedding != null)
+        {
+            model.ProductEmbedding = new ProductEmbeddingModel
+            {
+                Text = embedding.Text,
+                Embedding = JsonSerializer.Serialize(embedding.Embedding.Memory),
+                TokenDetails = embedding.TokenDetails,
+                CreatedDateTime = embedding.CreatedDateTime,
+                UpdatedDateTime = embedding.UpdatedDateTime,
+            };
+
+            var similarProducts = _productEmbeddingRepository.GetQueryableSet()
+                .Where(x => x.ProductId != id)
+                .OrderBy(x => EF.Functions.VectorDistance("cosine", x.Embedding, embedding.Embedding))
+                .Take(5)
+                .Select(x => new SimilarProductModel
+                {
+                    Id = x.Product.Id,
+                    Code = x.Product.Code,
+                    Name = x.Product.Name,
+                    Description = x.Product.Description,
+                    SimilarityScore = EF.Functions.VectorDistance("cosine", x.Embedding, embedding.Embedding)
+                }).ToList();
+
+            model.SimilarProducts = similarProducts;
+        }
+
         return Ok(model);
     }
 

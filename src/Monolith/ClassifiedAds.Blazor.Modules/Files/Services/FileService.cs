@@ -21,6 +21,16 @@ public class FileService : HttpService
         return $"{_httpClient.BaseAddress.AbsoluteUri.Trim('/')}/api/files/{id}/download";
     }
 
+    public string GetDownloadTextUrl(Guid id)
+    {
+        return $"{_httpClient.BaseAddress.AbsoluteUri.Trim('/')}/api/files/{id}/downloadtext";
+    }
+
+    public string GetDownloadChunkUrl(Guid id, string chunkName)
+    {
+        return $"{_httpClient.BaseAddress.AbsoluteUri.Trim('/')}/api/files/{id}/downloadchunk/{chunkName}";
+    }
+
     public string GetUploadUrl()
     {
         return $"{_httpClient.BaseAddress.AbsoluteUri.Trim('/')}/api/files";
@@ -72,5 +82,11 @@ public class FileService : HttpService
     {
         var auditLogs = await GetAsync<List<FileEntryAuditLogModel>>($"api/files/{id}/auditlogs");
         return auditLogs;
+    }
+
+    public async Task<List<FileEntryVectorSearchResultModel>> VectorSearchFilesAsync(string searchText)
+    {
+        var files = await GetAsync<List<FileEntryVectorSearchResultModel>>($"api/files/vectorsearch?searchText={searchText}");
+        return files;
     }
 }

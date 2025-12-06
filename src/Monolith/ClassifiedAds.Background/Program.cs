@@ -1,13 +1,16 @@
 ﻿using ClassifiedAds.Application.FeatureToggles;
-using ClassifiedAds.Application.FileEntries.DTOs;
+using ClassifiedAds.Application.FileEntries.MessageBusEvents;
+using ClassifiedAds.Application.Products.MessageBusEvents;
 using ClassifiedAds.Background.ConfigurationOptions;
 using ClassifiedAds.Background.HostedServices;
 using ClassifiedAds.Background.Identity;
 using ClassifiedAds.Background.MessageBusConsumers;
+using ClassifiedAds.Background.Services;
 using ClassifiedAds.CrossCuttingConcerns.Exceptions;
 using ClassifiedAds.Domain.Identity;
 using ClassifiedAds.Domain.IdentityProviders;
 using ClassifiedAds.Domain.Infrastructure.Messaging;
+using ClassifiedAds.Infrastructure.AI;
 using ClassifiedAds.Infrastructure.FeatureToggles.OutboxPublishingToggle;
 using ClassifiedAds.Infrastructure.HostedServices;
 using ClassifiedAds.Infrastructure.IdentityProviders.Auth0;
@@ -55,11 +58,30 @@ Host.CreateDefaultBuilder(args)
             .AddApplicationServices()
             .AddMessageHandlers();
 
+    services.AddStorageManager(appSettings.Storage);
+    services.AddScoped<EmbeddingService>();
+    services.AddScoped<ImageAnalysisService>();
+    services.AddScoped<MarkdownService>();
+
     services.AddTransient<IMessageBus, MessageBus>();
-    services.AddMessageBusSender<FileUploadedEvent>(appSettings.Messaging);
+    services.AddMessageBusSender<FileCreatedEvent>(appSettings.Messaging);
+    services.AddMessageBusSender<FileUpdatedEvent>(appSettings.Messaging);
     services.AddMessageBusSender<FileDeletedEvent>(appSettings.Messaging);
-    services.AddMessageBusReceiver<WebhookConsumer, FileUploadedEvent>(appSettings.Messaging);
+    services.AddMessageBusSender<ProductCreatedEvent>(appSettings.Messaging);
+    services.AddMessageBusSender<ProductUpdatedEvent>(appSettings.Messaging);
+    services.AddMessageBusSender<ProductDeletedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<WebhookConsumer, FileCreatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<WebhookConsumer, FileUpdatedEvent>(appSettings.Messaging);
     services.AddMessageBusReceiver<WebhookConsumer, FileDeletedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<WebhookConsumer, ProductCreatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<WebhookConsumer, ProductUpdatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<WebhookConsumer, ProductDeletedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<FileEmbeddingConsumer, FileCreatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<FileEmbeddingConsumer, FileUpdatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<FileEmbeddingConsumer, FileDeletedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<ProductEmbeddingConsumer, ProductCreatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<ProductEmbeddingConsumer, ProductUpdatedEvent>(appSettings.Messaging);
+    services.AddMessageBusReceiver<ProductEmbeddingConsumer, ProductDeletedEvent>(appSettings.Messaging);
     services.AddMessageBusConsumers(Assembly.GetExecutingAssembly());
     services.AddOutboxMessagePublishers(Assembly.GetExecutingAssembly());
 
@@ -91,9 +113,19 @@ static void AddFeatureToggles(IServiceCollection services)
 
 static void AddHostedServices(IServiceCollection services)
 {
-    services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, FileUploadedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, FileCreatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, FileUpdatedEvent>>();
     services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, FileDeletedEvent>>();
-    services.AddHostedService<PublishEventWorker>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, ProductCreatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, ProductUpdatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<WebhookConsumer, ProductDeletedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<FileEmbeddingConsumer, FileCreatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<FileEmbeddingConsumer, FileUpdatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<FileEmbeddingConsumer, FileDeletedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<ProductEmbeddingConsumer, ProductCreatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<ProductEmbeddingConsumer, ProductUpdatedEvent>>();
+    services.AddHostedService<MessageBusConsumerBackgroundService<ProductEmbeddingConsumer, ProductDeletedEvent>>();
+    services.AddHostedService<PublishOutboxWorker>();
     services.AddHostedService<SendEmailWorker>();
     services.AddHostedService<SendSmsWorker>();
     services.AddHostedService<ScheduleCronJobWorker>();
